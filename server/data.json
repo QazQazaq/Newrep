@@ -1,0 +1,8 @@
+{
+  "overlays": [],
+  "settings": {
+    "rtspUrl": "rtsp://demo:demo@ipvmdemo.dyndns.org:5542/onvif-media/media.amp?profile=profile_1_h264&sessiontimeout=60&streamtype=unicast",
+    "volume": "1",
+    "autoplay": false
+  }
+}
