@@ -21,9 +21,7 @@ const RTSPPlayer: React.FC<RTSPPlayerProps> = ({
   const [isMuted, setIsMuted] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [streamStatus, setStreamStatus] = useState<any>(null);
-  const [streamMode, setStreamMode] = useState<'rtsp' | 'hls' | 'demo' | 'error'>('rtsp');
-  const [retryCount, setRetryCount] = useState(0);
+  const [streamMode, setStreamMode] = useState<'hls' | 'error'>('hls');
 
   useEffect(() => {
     if (videoRef.current) {
@@ -32,11 +30,11 @@ const RTSPPlayer: React.FC<RTSPPlayerProps> = ({
   }, [volume]);
 
   useEffect(() => {
-    initializeStream();
+    // Convert RTSP URL to HLS URL or use direct HLS URL
+    const hlsUrl = convertToHLSUrl(rtspUrl);
+    loadHLSStream(hlsUrl);
     return () => cleanup();
-  }, []);
-
-
+  }, [rtspUrl]);
 
   const cleanup = () => {
     if (hlsRef.current) {
@@ -45,108 +43,35 @@ const RTSPPlayer: React.FC<RTSPPlayerProps> = ({
     }
   };
 
-  const checkStreamStatus = async () => {
-    try {
-      const { getStreamStatus } = await import('../services/api');
-      const status = await getStreamStatus();
-      setStreamStatus(status);
-      return status;
-    } catch (error) {
-      console.error('Failed to check stream status:', error);
-      if (error.isDemoMode) {
-        return {
-          isRunning: false,
-          hlsAvailable: false,
-          mode: 'demo',
-          hasFFmpeg: false
-        };
-      }
-      return null;
+  const convertToHLSUrl = (url: string): string => {
+    // If it's already an HLS URL (.m3u8), use it directly
+    if (url.includes('.m3u8')) {
+      return url;
     }
-  };
-
-  const startRTSPStream = async () => {
-    try {
-      setIsLoading(true);
-      setError(null);
+    
+    // If it's an RTSP URL, assume there's an HLS endpoint available
+    // You can modify this logic based on your streaming setup
+    if (url.startsWith('rtsp://')) {
+      // Option 1: Use your backend's HLS endpoint
+      return `http://localhost:3001/hls/stream.m3u8`;
       
-      // Try to start stream via API
-      const { startStream } = await import('../services/api');
-      try {
-        const data = await startStream(rtspUrl);
-      
-        // Check if FFmpeg is available
-        if (data.mode === 'demo' || (data.note && data.note.includes('not available'))) {
-          setStreamMode('demo');
-          setIsLoading(false);
-          setError(`RTSP streaming not supported: ${data.note}`);
-          loadDemoStream();
-          return;
-        }
-        
-        setStreamMode('hls');
-        
-        // Wait for stream conversion to initialize
-        setTimeout(() => {
-          loadHLSStream(data.hlsUrl);
-        }, 3000);
-        
-      } catch (apiError) {
-        console.error('Stream API error:', apiError);
-        setIsLoading(false);
-        setStreamMode('demo');
-        
-        if (apiError.response?.data?.suggestions) {
-          setError(`RTSP streaming failed: ${apiError.response.data.error}. ${apiError.response.data.note}`);
-          loadDemoStream();
-        } else {
-          setError(`RTSP streaming failed: ${apiError.message || 'Unknown error'}`);
-          setTimeout(() => {
-            loadDemoStream();
-          }, 500);
-        }
-        return;
-      }
-      
-    } catch (error) {
-      console.error('RTSP stream error:', error);
-      if (error.isDemoMode) {
-        setStreamMode('demo');
-        setError('Backend server not available. RTSP streaming requires a backend server with FFmpeg support.');
-        setTimeout(() => {
-          loadDemoStream();
-        }, 2000);
-      } else {
-        setError(`RTSP stream failed: ${error.message || 'Unknown error occurred'}`);
-        setStreamMode('error');
-        setIsLoading(false);
-      }
+      // Option 2: If you have a direct RTSP to HLS service
+      // return url.replace('rtsp://', 'http://').replace(':554', ':8080') + '/stream.m3u8';
     }
-  };
-
-  const loadDemoStream = () => {
-    if (!videoRef.current) return;
     
-    setIsLoading(false);
-    setStreamMode('demo');
-    
-    // Use a demo video as fallback when RTSP/FFmpeg is not available
-    const demoVideoUrl = 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4';
-    videoRef.current.src = demoVideoUrl;
-    videoRef.current.loop = true;
-    
-    if (autoplay) {
-      videoRef.current.play().catch(() => {
-        console.log('Autoplay blocked, user interaction required');
-      });
-    }
+    // Default fallback
+    return url;
   };
 
   const loadHLSStream = (hlsUrl: string) => {
     if (!videoRef.current) return;
 
     cleanup();
+    setIsLoading(true);
+    setError(null);
     setStreamMode('hls');
+
+    console.log('Loading HLS stream:', hlsUrl);
 
     if (Hls.isSupported()) {
       const hls = new Hls({
@@ -156,7 +81,8 @@ const RTSPPlayer: React.FC<RTSPPlayerProps> = ({
         maxBufferLength: 60,
         maxMaxBufferLength: 120,
         startLevel: -1,
-        capLevelToPlayerSize: true
+        capLevelToPlayerSize: true,
+        debug: false
       });
       
       hlsRef.current = hls;
@@ -168,80 +94,75 @@ const RTSPPlayer: React.FC<RTSPPlayerProps> = ({
         console.log('HLS manifest parsed successfully');
         setIsLoading(false);
         setError(null);
-        setRetryCount(0);
         if (autoplay) {
-          videoRef.current?.play();
+          videoRef.current?.play().catch(err => {
+            console.log('Autoplay blocked:', err);
+          });
         }
+      });
+
+      hls.on(Hls.Events.MEDIA_ATTACHED, () => {
+        console.log('HLS media attached');
+      });
+
+      hls.on(Hls.Events.FRAG_LOADED, () => {
+        console.log('HLS fragment loaded');
       });
       
       hls.on(Hls.Events.ERROR, (event, data) => {
         console.error('HLS Error:', data);
+        
         if (data.fatal) {
           switch (data.type) {
             case Hls.ErrorTypes.NETWORK_ERROR:
-              setError('Network error loading RTSP stream. Check if the RTSP URL is accessible.');
+              setError(`Network error loading HLS stream: ${data.details}. Check if the HLS URL is accessible: ${hlsUrl}`);
               break;
             case Hls.ErrorTypes.MEDIA_ERROR:
-              setError('Media error in RTSP stream. The stream format may not be supported.');
+              setError(`Media error in HLS stream: ${data.details}. The stream format may not be supported.`);
               break;
             default:
-              setError('Fatal error loading RTSP stream.');
+              setError(`Fatal HLS error: ${data.details}`);
               break;
           }
           setStreamMode('error');
           setIsLoading(false);
+        } else {
+          console.warn('Non-fatal HLS error:', data);
         }
       });
       
     } else if (videoRef.current.canPlayType('application/vnd.apple.mpegurl')) {
       // Safari native HLS support
+      console.log('Using Safari native HLS support');
       videoRef.current.src = hlsUrl;
       
       videoRef.current.addEventListener('error', (e) => {
         console.error('Video error:', e);
-        setError('Error loading RTSP stream in Safari');
+        setError(`Error loading HLS stream in Safari: ${hlsUrl}`);
         setStreamMode('error');
         setIsLoading(false);
       });
       
       videoRef.current.addEventListener('loadeddata', () => {
+        console.log('Safari HLS stream loaded');
         setIsLoading(false);
         setError(null);
         if (autoplay) {
-          videoRef.current?.play();
+          videoRef.current?.play().catch(err => {
+            console.log('Autoplay blocked:', err);
+          });
         }
       });
+
+      videoRef.current.addEventListener('loadstart', () => {
+        console.log('Safari HLS stream loading started');
+        setIsLoading(true);
+      });
+      
     } else {
-      setError('HLS not supported in this browser. RTSP streaming requires HLS support.');
+      setError('HLS not supported in this browser. Please use a modern browser with HLS support.');
       setStreamMode('error');
       setIsLoading(false);
-    }
-  };
-
-  const initializeStream = async () => {
-    setIsLoading(true);
-    setError(null);
-    
-    const status = await checkStreamStatus();
-    
-    if (status?.hlsAvailable && status?.isRunning) {
-      // Stream is already running, load it directly
-      console.log('Loading existing HLS stream');
-      loadHLSStream(status.hlsUrl);
-    } else {
-      // Start new RTSP stream conversion
-      console.log('Starting new RTSP stream conversion');
-      await startRTSPStream();
-    }
-  };
-
-  const retryStream = () => {
-    if (retryCount < 3) {
-      setRetryCount(prev => prev + 1);
-      setError(null);
-      initializeStream();
-    } else {
-      setError('Maximum retry attempts reached. Please check your RTSP URL and network connection.');
     }
   };
 
@@ -278,10 +199,15 @@ const RTSPPlayer: React.FC<RTSPPlayerProps> = ({
     }
   };
 
+  const retryStream = () => {
+    setError(null);
+    const hlsUrl = convertToHLSUrl(rtspUrl);
+    loadHLSStream(hlsUrl);
+  };
+
   const getStatusColor = () => {
     switch (streamMode) {
       case 'hls': return 'text-green-400';
-      case 'demo': return 'text-yellow-400';
       case 'error': return 'text-red-400';
       default: return 'text-gray-400';
     }
@@ -289,8 +215,7 @@ const RTSPPlayer: React.FC<RTSPPlayerProps> = ({
 
   const getStatusText = () => {
     switch (streamMode) {
-      case 'hls': return 'RTSP → HLS Live';
-      case 'demo': return 'Demo Mode';
+      case 'hls': return 'HLS Live Stream';
       case 'error': return 'Stream Error';
       default: return 'Connecting...';
     }
@@ -298,20 +223,11 @@ const RTSPPlayer: React.FC<RTSPPlayerProps> = ({
 
   return (
     <div className="relative">
-      {/* Stream Mode Banner */}
-      {streamMode === 'demo' && (
-        <div className="bg-yellow-600 text-white px-4 py-2 text-sm flex items-center">
-          <AlertCircle className="w-4 h-4 mr-2" />
-          <strong>Demo Mode:</strong> FFmpeg not available. Install FFmpeg to enable RTSP streaming.
-        </div>
-      )}
-      
-      {streamMode === 'hls' && (
-        <div className="bg-green-600 text-white px-4 py-2 text-sm flex items-center">
-          <Wifi className="w-4 h-4 mr-2" />
-          <strong>Live RTSP Stream:</strong> {rtspUrl}
-        </div>
-      )}
+      {/* Stream Status Banner */}
+      <div className="bg-green-600 text-white px-4 py-2 text-sm flex items-center">
+        <Wifi className="w-4 h-4 mr-2" />
+        <strong>HLS Stream:</strong> {convertToHLSUrl(rtspUrl)}
+      </div>
       
       <div className="aspect-video bg-black relative">
         <video
@@ -331,16 +247,11 @@ const RTSPPlayer: React.FC<RTSPPlayerProps> = ({
           <div className="absolute inset-0 bg-black bg-opacity-75 flex items-center justify-center">
             <div className="text-center text-white">
               <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500 mx-auto mb-4"></div>
-              <p className="text-lg font-semibold">
-                {streamMode === 'demo' ? 'Loading demo video...' : 'Converting RTSP stream...'}
-              </p>
-              {streamMode !== 'demo' && (
-                <div className="text-sm text-gray-400 mt-2 space-y-1">
-                  <p>Processing: {rtspUrl}</p>
-                  <p>Converting to web-compatible HLS format</p>
-                  <p>This may take a few moments...</p>
-                </div>
-              )}
+              <p className="text-lg font-semibold">Loading HLS stream...</p>
+              <div className="text-sm text-gray-400 mt-2 space-y-1">
+                <p>Stream URL: {convertToHLSUrl(rtspUrl)}</p>
+                <p>Connecting to HLS manifest...</p>
+              </div>
             </div>
           </div>
         )}
@@ -350,38 +261,28 @@ const RTSPPlayer: React.FC<RTSPPlayerProps> = ({
           <div className="absolute inset-0 bg-black bg-opacity-75 flex items-center justify-center">
             <div className="text-center text-white max-w-md px-4">
               <AlertCircle className="w-12 h-12 text-red-500 mx-auto mb-4" />
-              <h3 className="text-lg font-semibold mb-2">RTSP Stream Error</h3>
+              <h3 className="text-lg font-semibold mb-2">HLS Stream Error</h3>
               <div className="mb-4 text-sm space-y-2">
                 <p>{error}</p>
                 <div className="text-xs text-gray-400 bg-gray-800 p-2 rounded">
-                  <p><strong>Common causes:</strong></p>
+                  <p><strong>Troubleshooting:</strong></p>
                   <ul className="list-disc list-inside mt-1 space-y-1">
-                    <li>Environment doesn't support FFmpeg execution</li>
-                    <li>RTSP URL is not accessible</li>
-                    <li>Network connectivity issues</li>
-                    <li>Containerized environment restrictions</li>
+                    <li>Check if HLS URL is accessible</li>
+                    <li>Verify network connectivity</li>
+                    <li>Ensure HLS stream is active</li>
+                    <li>Check CORS settings if cross-origin</li>
                   </ul>
                 </div>
               </div>
               <div className="space-y-2">
-                <p className="text-xs text-gray-400">RTSP URL: {rtspUrl}</p>
-                <p className="text-xs text-gray-400">Retry attempts: {retryCount}/3</p>
+                <p className="text-xs text-gray-400">HLS URL: {convertToHLSUrl(rtspUrl)}</p>
               </div>
-              <div className="flex space-x-2 mt-4">
-                <button
-                  onClick={retryStream}
-                  disabled={retryCount >= 3}
-                  className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded transition-colors disabled:opacity-50"
-                >
-                  Retry RTSP
-                </button>
-                <button
-                  onClick={loadDemoStream}
-                  className="bg-gray-600 hover:bg-gray-700 text-white px-4 py-2 rounded transition-colors"
-                >
-                  Use Demo Video
-                </button>
-              </div>
+              <button
+                onClick={retryStream}
+                className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded transition-colors mt-4"
+              >
+                Retry HLS Stream
+              </button>
             </div>
           </div>
         )}
