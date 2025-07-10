@@ -30,9 +30,10 @@ const RTSPPlayer: React.FC<RTSPPlayerProps> = ({
   }, [volume]);
 
   useEffect(() => {
-    // Convert RTSP URL to HLS URL or use direct HLS URL
-    const hlsUrl = convertToHLSUrl(rtspUrl);
-    loadHLSStream(hlsUrl);
+    if (rtspUrl) {
+      const hlsUrl = convertRTSPToMediaMTXHLS(rtspUrl);
+      loadHLSStream(hlsUrl);
+    }
     return () => cleanup();
   }, [rtspUrl]);
 
@@ -43,24 +44,29 @@ const RTSPPlayer: React.FC<RTSPPlayerProps> = ({
     }
   };
 
-  const convertToHLSUrl = (url: string): string => {
+  const convertRTSPToMediaMTXHLS = (rtspUrl: string): string => {
     // If it's already an HLS URL (.m3u8), use it directly
-    if (url.includes('.m3u8')) {
-      return url;
+    if (rtspUrl.includes('.m3u8')) {
+      return rtspUrl;
     }
     
-    // If it's an RTSP URL, assume there's an HLS endpoint available
-    // You can modify this logic based on your streaming setup
-    if (url.startsWith('rtsp://')) {
-      // Option 1: Use your backend's HLS endpoint
-      return `http://localhost:3001/hls/stream.m3u8`;
+    // Convert RTSP URL to MediaMTX HLS format
+    if (rtspUrl.startsWith('rtsp://')) {
+      // Extract stream path from RTSP URL
+      // Example: rtsp://example.com:554/stream -> stream
+      const urlParts = rtspUrl.split('/');
+      const streamPath = urlParts[urlParts.length - 1] || 'stream';
       
-      // Option 2: If you have a direct RTSP to HLS service
-      // return url.replace('rtsp://', 'http://').replace(':554', ':8080') + '/stream.m3u8';
+      // MediaMTX typically serves HLS on port 8888 with path format
+      // Adjust the host and port based on your MediaMTX configuration
+      const rtspHost = rtspUrl.split('//')[1].split('/')[0].split(':')[0];
+      
+      // Default MediaMTX HLS endpoint format
+      return `http://${rtspHost}:8888/${streamPath}/index.m3u8`;
     }
     
-    // Default fallback
-    return url;
+    // Fallback to original URL
+    return rtspUrl;
   };
 
   const loadHLSStream = (hlsUrl: string) => {
@@ -71,18 +77,23 @@ const RTSPPlayer: React.FC<RTSPPlayerProps> = ({
     setError(null);
     setStreamMode('hls');
 
-    console.log('Loading HLS stream:', hlsUrl);
+    console.log('Loading MediaMTX HLS stream:', hlsUrl);
 
     if (Hls.isSupported()) {
       const hls = new Hls({
         enableWorker: false,
         lowLatencyMode: true,
-        backBufferLength: 30,
-        maxBufferLength: 60,
-        maxMaxBufferLength: 120,
+        backBufferLength: 10,
+        maxBufferLength: 30,
+        maxMaxBufferLength: 60,
         startLevel: -1,
         capLevelToPlayerSize: true,
-        debug: false
+        debug: false,
+        // MediaMTX specific optimizations
+        liveSyncDurationCount: 3,
+        liveMaxLatencyDurationCount: 5,
+        liveDurationInfinity: true,
+        highBufferWatchdogPeriod: 1
       });
       
       hlsRef.current = hls;
@@ -91,7 +102,7 @@ const RTSPPlayer: React.FC<RTSPPlayerProps> = ({
       hls.attachMedia(videoRef.current);
       
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
-        console.log('HLS manifest parsed successfully');
+        console.log('MediaMTX HLS manifest parsed successfully');
         setIsLoading(false);
         setError(null);
         if (autoplay) {
@@ -102,49 +113,49 @@ const RTSPPlayer: React.FC<RTSPPlayerProps> = ({
       });
 
       hls.on(Hls.Events.MEDIA_ATTACHED, () => {
-        console.log('HLS media attached');
+        console.log('HLS media attached to MediaMTX stream');
       });
 
       hls.on(Hls.Events.FRAG_LOADED, () => {
-        console.log('HLS fragment loaded');
+        // Fragment loaded successfully
       });
       
       hls.on(Hls.Events.ERROR, (event, data) => {
-        console.error('HLS Error:', data);
+        console.error('MediaMTX HLS Error:', data);
         
         if (data.fatal) {
           switch (data.type) {
             case Hls.ErrorTypes.NETWORK_ERROR:
-              setError(`Network error loading HLS stream: ${data.details}. Check if the HLS URL is accessible: ${hlsUrl}`);
+              setError(`Network error loading MediaMTX HLS stream: ${data.details}. Check if MediaMTX is running and accessible at: ${hlsUrl}`);
               break;
             case Hls.ErrorTypes.MEDIA_ERROR:
-              setError(`Media error in HLS stream: ${data.details}. The stream format may not be supported.`);
+              setError(`Media error in MediaMTX HLS stream: ${data.details}. Check RTSP source and MediaMTX configuration.`);
               break;
             default:
-              setError(`Fatal HLS error: ${data.details}`);
+              setError(`Fatal MediaMTX HLS error: ${data.details}`);
               break;
           }
           setStreamMode('error');
           setIsLoading(false);
         } else {
-          console.warn('Non-fatal HLS error:', data);
+          console.warn('Non-fatal MediaMTX HLS error:', data);
         }
       });
       
     } else if (videoRef.current.canPlayType('application/vnd.apple.mpegurl')) {
       // Safari native HLS support
-      console.log('Using Safari native HLS support');
+      console.log('Using Safari native HLS support for MediaMTX');
       videoRef.current.src = hlsUrl;
       
       videoRef.current.addEventListener('error', (e) => {
-        console.error('Video error:', e);
-        setError(`Error loading HLS stream in Safari: ${hlsUrl}`);
+        console.error('Safari video error with MediaMTX:', e);
+        setError(`Error loading MediaMTX HLS stream in Safari: ${hlsUrl}`);
         setStreamMode('error');
         setIsLoading(false);
       });
       
       videoRef.current.addEventListener('loadeddata', () => {
-        console.log('Safari HLS stream loaded');
+        console.log('Safari MediaMTX HLS stream loaded');
         setIsLoading(false);
         setError(null);
         if (autoplay) {
@@ -155,7 +166,6 @@ const RTSPPlayer: React.FC<RTSPPlayerProps> = ({
       });
 
       videoRef.current.addEventListener('loadstart', () => {
-        console.log('Safari HLS stream loading started');
         setIsLoading(true);
       });
       
@@ -201,8 +211,10 @@ const RTSPPlayer: React.FC<RTSPPlayerProps> = ({
 
   const retryStream = () => {
     setError(null);
-    const hlsUrl = convertToHLSUrl(rtspUrl);
-    loadHLSStream(hlsUrl);
+    if (rtspUrl) {
+      const hlsUrl = convertRTSPToMediaMTXHLS(rtspUrl);
+      loadHLSStream(hlsUrl);
+    }
   };
 
   const getStatusColor = () => {
@@ -215,18 +227,20 @@ const RTSPPlayer: React.FC<RTSPPlayerProps> = ({
 
   const getStatusText = () => {
     switch (streamMode) {
-      case 'hls': return 'HLS Live Stream';
+      case 'hls': return 'MediaMTX HLS Live';
       case 'error': return 'Stream Error';
       default: return 'Connecting...';
     }
   };
+
+  const currentHLSUrl = rtspUrl ? convertRTSPToMediaMTXHLS(rtspUrl) : '';
 
   return (
     <div className="relative">
       {/* Stream Status Banner */}
       <div className="bg-green-600 text-white px-4 py-2 text-sm flex items-center">
         <Wifi className="w-4 h-4 mr-2" />
-        <strong>HLS Stream:</strong> {convertToHLSUrl(rtspUrl)}
+        <strong>RTSP → MediaMTX → HLS:</strong> {rtspUrl}
       </div>
       
       <div className="aspect-video bg-black relative">
@@ -247,10 +261,11 @@ const RTSPPlayer: React.FC<RTSPPlayerProps> = ({
           <div className="absolute inset-0 bg-black bg-opacity-75 flex items-center justify-center">
             <div className="text-center text-white">
               <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500 mx-auto mb-4"></div>
-              <p className="text-lg font-semibold">Loading HLS stream...</p>
+              <p className="text-lg font-semibold">Loading MediaMTX HLS stream...</p>
               <div className="text-sm text-gray-400 mt-2 space-y-1">
-                <p>Stream URL: {convertToHLSUrl(rtspUrl)}</p>
-                <p>Connecting to HLS manifest...</p>
+                <p>RTSP Source: {rtspUrl}</p>
+                <p>HLS Endpoint: {currentHLSUrl}</p>
+                <p>Connecting via MediaMTX...</p>
               </div>
             </div>
           </div>
@@ -261,27 +276,29 @@ const RTSPPlayer: React.FC<RTSPPlayerProps> = ({
           <div className="absolute inset-0 bg-black bg-opacity-75 flex items-center justify-center">
             <div className="text-center text-white max-w-md px-4">
               <AlertCircle className="w-12 h-12 text-red-500 mx-auto mb-4" />
-              <h3 className="text-lg font-semibold mb-2">HLS Stream Error</h3>
+              <h3 className="text-lg font-semibold mb-2">MediaMTX HLS Stream Error</h3>
               <div className="mb-4 text-sm space-y-2">
                 <p>{error}</p>
                 <div className="text-xs text-gray-400 bg-gray-800 p-2 rounded">
-                  <p><strong>Troubleshooting:</strong></p>
+                  <p><strong>MediaMTX Troubleshooting:</strong></p>
                   <ul className="list-disc list-inside mt-1 space-y-1">
-                    <li>Check if HLS URL is accessible</li>
-                    <li>Verify network connectivity</li>
-                    <li>Ensure HLS stream is active</li>
-                    <li>Check CORS settings if cross-origin</li>
+                    <li>Check if MediaMTX is running</li>
+                    <li>Verify RTSP source is accessible</li>
+                    <li>Ensure MediaMTX HLS is enabled</li>
+                    <li>Check MediaMTX configuration file</li>
+                    <li>Verify port 8888 is accessible</li>
                   </ul>
                 </div>
               </div>
               <div className="space-y-2">
-                <p className="text-xs text-gray-400">HLS URL: {convertToHLSUrl(rtspUrl)}</p>
+                <p className="text-xs text-gray-400">RTSP: {rtspUrl}</p>
+                <p className="text-xs text-gray-400">HLS: {currentHLSUrl}</p>
               </div>
               <button
                 onClick={retryStream}
                 className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded transition-colors mt-4"
               >
-                Retry HLS Stream
+                Retry MediaMTX Stream
               </button>
             </div>
           </div>
