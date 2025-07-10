@@ -31,11 +31,10 @@ const RTSPPlayer: React.FC<RTSPPlayerProps> = ({
     }
   }, [volume]);
 
-useEffect(() => {
-  cleanup();
-  loadHLSStream("http://localhost:3001/hls/stream.m3u8");
-  return () => cleanup();
-}, []);
+  useEffect(() => {
+    initializeStream();
+    return () => cleanup();
+  }, []);
 
 
 
