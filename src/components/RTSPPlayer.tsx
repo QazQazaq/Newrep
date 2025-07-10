@@ -78,10 +78,9 @@ const RTSPPlayer: React.FC<RTSPPlayerProps> = ({
         // Check if FFmpeg is available
         if (data.mode === 'demo' || (data.note && data.note.includes('not available'))) {
           setStreamMode('demo');
+          setIsLoading(false);
           setError(`RTSP streaming not supported: ${data.note}`);
-          setTimeout(() => {
-            loadDemoStream();
-          }, 2000);
+          loadDemoStream();
           return;
         }
         
@@ -94,17 +93,18 @@ const RTSPPlayer: React.FC<RTSPPlayerProps> = ({
         
       } catch (apiError) {
         console.error('Stream API error:', apiError);
+        setIsLoading(false);
         setStreamMode('demo');
         
         if (apiError.response?.data?.suggestions) {
           setError(`RTSP streaming failed: ${apiError.response.data.error}. ${apiError.response.data.note}`);
+          loadDemoStream();
         } else {
           setError(`RTSP streaming failed: ${apiError.message || 'Unknown error'}`);
+          setTimeout(() => {
+            loadDemoStream();
+          }, 500);
         }
-        
-        setTimeout(() => {
-          loadDemoStream();
-        }, 2000);
         return;
       }
       
