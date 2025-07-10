@@ -52,21 +52,60 @@ const RTSPPlayer: React.FC<RTSPPlayerProps> = ({
     
     // Convert RTSP URL to MediaMTX HLS format
     if (rtspUrl.startsWith('rtsp://')) {
-      // Extract stream path from RTSP URL
-      // Example: rtsp://example.com:554/stream -> stream
-      const urlParts = rtspUrl.split('/');
-      const streamPath = urlParts[urlParts.length - 1] || 'stream';
+      // For MediaMTX, we need to create a stream name from the RTSP URL
+      // Since MediaMTX requires the RTSP stream to be sent to it first,
+      // we'll use a hash of the URL as the stream name to make it unique
+      const streamName = btoa(rtspUrl).replace(/[^a-zA-Z0-9]/g, '').substring(0, 16);
       
-      // MediaMTX typically serves HLS on port 8888 with path format
-      // Adjust the host and port based on your MediaMTX configuration
-      const rtspHost = rtspUrl.split('//')[1].split('/')[0].split(':')[0];
-      
-      // Default MediaMTX HLS endpoint format
-      return `http://${rtspHost}:8888/${streamPath}/index.m3u8`;
+      // MediaMTX HLS endpoint on localhost (where MediaMTX is running)
+      return `http://localhost:8888/${streamName}/index.m3u8`;
     }
     
     // Fallback to original URL
     return rtspUrl;
+  };
+
+  const setupMediaMTXStream = async (rtspUrl: string, streamName: string) => {
+    try {
+      // Check if MediaMTX is running
+      const response = await fetch('http://localhost:9997/v3/config/global');
+      if (!response.ok) {
+        throw new Error('MediaMTX not running');
+      }
+
+      // Configure MediaMTX path for this stream
+      const pathConfig = {
+        source: rtspUrl,
+        sourceProtocol: 'automatic',
+        sourceAnyPortEnable: false,
+        sourceFingerprint: '',
+        sourceOnDemand: false,
+        sourceOnDemandStartTimeout: '10s',
+        sourceOnDemandCloseAfter: '10s',
+        sourceRedirect: '',
+        disablePublisherOverride: false,
+        fallback: '',
+        srtPublishPassphrase: '',
+        srtReadPassphrase: ''
+      };
+
+      const pathResponse = await fetch(`http://localhost:9997/v3/config/paths/${streamName}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(pathConfig)
+      });
+
+      if (!pathResponse.ok) {
+        console.warn('Could not configure MediaMTX path, stream may still work');
+      }
+
+      return true;
+    } catch (error) {
+      console.error('MediaMTX setup error:', error);
+      return false;
+    }
   };
 
   const loadHLSStream = (hlsUrl: string) => {
@@ -78,6 +117,16 @@ const RTSPPlayer: React.FC<RTSPPlayerProps> = ({
     setStreamMode('hls');
 
     console.log('Loading MediaMTX HLS stream:', hlsUrl);
+
+    // If this is a MediaMTX URL, try to setup the stream first
+    if (hlsUrl.includes('localhost:8888') && rtspUrl) {
+      const streamName = hlsUrl.split('/')[3]; // Extract stream name from HLS URL
+      setupMediaMTXStream(rtspUrl, streamName).then(success => {
+        if (success) {
+          console.log('MediaMTX stream configured successfully');
+        }
+      });
+    }
 
     if (Hls.isSupported()) {
       const hls = new Hls({
@@ -126,7 +175,15 @@ const RTSPPlayer: React.FC<RTSPPlayerProps> = ({
         if (data.fatal) {
           switch (data.type) {
             case Hls.ErrorTypes.NETWORK_ERROR:
-              setError(`Network error loading MediaMTX HLS stream: ${data.details}. Check if MediaMTX is running and accessible at: ${hlsUrl}`);
+              setError(`Network error loading MediaMTX HLS stream: ${data.details}. Check if MediaMTX is running and accessible at: ${hlsUrl}
+
+MediaMTX Troubleshooting:
+
+1. Check if MediaMTX is running
+2. Verify RTSP source is accessible
+3. Ensure MediaMTX HLS is enabled
+4. Check MediaMTX configuration file
+5. Verify port 8888 is accessible`);
               break;
             case Hls.ErrorTypes.MEDIA_ERROR:
               setError(`Media error in MediaMTX HLS stream: ${data.details}. Check RTSP source and MediaMTX configuration.`);
