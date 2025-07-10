@@ -1,0 +1,64 @@
+# MediaMTX configuration for RTSP to HLS conversion
+
+# General settings
+logLevel: info
+logDestinations: [stdout]
+logFile: mediamtx.log
+
+# API settings
+api: yes
+apiAddress: 127.0.0.1:9997
+
+# Metrics settings
+metrics: yes
+metricsAddress: 127.0.0.1:9998
+
+# RTSP settings
+rtspAddress: :8554
+protocols: [udp, multicast, tcp]
+encryption: "no"
+rtspAuthMethods: [basic, digest]
+
+# HLS settings
+hls: yes
+hlsAddress: :8888
+hlsEncryption: no
+hlsAllowOrigin: "*"
+hlsVariant: lowLatency
+hlsSegmentCount: 7
+hlsSegmentDuration: 1s
+hlsPartDuration: 200ms
+hlsSegmentMaxSize: 50M
+hlsDirectory: ""
+
+# WebRTC settings
+webrtc: yes
+webrtcAddress: :8889
+webrtcAllowOrigin: "*"
+
+# Paths configuration
+paths:
+  # Default path - accepts any RTSP stream
+  ~^.*$:
+    # Source can be RTSP, file, or other formats
+    # This allows any RTSP stream to be converted to HLS
+    runOnInit: ""
+    runOnInitRestart: no
+    runOnDemand: ""
+    runOnDemandRestart: no
+    runOnDemandStartTimeout: 10s
+    runOnDemandCloseAfter: 10s
+    runOnReady: ""
+    runOnReadyRestart: no
+    runOnNotReady: ""
+    runOnNotReadyRestart: no
+    
+  # Example specific stream configuration
+  # You can add specific paths for your RTSP streams
+  stream:
+    # Example: source: rtsp://your-camera-ip:554/stream
+    source: ""
+    
+  # Test stream path
+  test:
+    source: "rtsp://wowzaec2demo.streamlock.net/vod/mp4:BigBuckBunny_115k.mp4"

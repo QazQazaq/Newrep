@@ -21,29 +21,24 @@ A professional RTSP livestream application with custom overlay management, built
 ## Prerequisites
 
 - Node.js (v16 or higher)
-- **FFmpeg (REQUIRED for RTSP streaming)** - Must be installed and available in system PATH
-  - **Windows**: Download from https://ffmpeg.org/download.html
-  - **macOS**: `brew install ffmpeg`
-  - **Linux**: `sudo apt install ffmpeg` or equivalent
-  - **Containerized Environments**: May not support FFmpeg execution due to security restrictions
+- **MediaMTX (INCLUDED)** - Real-time media server for RTSP to HLS conversion
+  - MediaMTX binary is included in the project
+  - No additional installation required
+  - Works in containerized environments
 
-**IMPORTANT**: This application requires FFmpeg to convert RTSP streams to web-compatible HLS format. Many containerized environments (GitHub Codespaces, some Docker containers, WebContainers) restrict native binary execution, preventing FFmpeg from running even if installed.
+**IMPORTANT**: This application uses MediaMTX to convert RTSP streams to web-compatible HLS format. MediaMTX is a modern, lightweight alternative to FFmpeg that works well in containerized environments.
 
 ### Environment Compatibility
 
 **✅ Fully Supported:**
-- Local development machines with FFmpeg installed
-- VPS/Dedicated servers with FFmpeg
-- Docker containers with proper FFmpeg setup and execution permissions
-- Cloud instances (AWS EC2, Google Compute, etc.) with FFmpeg
-
-**⚠️ Limited Support (Demo Mode Only):**
-- GitHub Codespaces (security restrictions)
+- Local development machines
+- VPS/Dedicated servers
+- Docker containers
+- Cloud instances (AWS EC2, Google Compute, etc.)
+- GitHub Codespaces
 - WebContainer environments
-- Sandboxed development environments
-- Some Docker configurations with restricted execution
 
-**For production RTSP streaming, deploy to an environment that supports native binary execution.**
+**MediaMTX provides better compatibility than FFmpeg in restricted environments.**
 ## Installation
 
 1. Install dependencies:
@@ -51,17 +46,19 @@ A professional RTSP livestream application with custom overlay management, built
 npm install
 ```
 
-2. Start the development server:
+2. Start the development server with MediaMTX:
 ```bash
-npm run dev
+npm run dev-with-mediamtx
 ```
 
-This will start both the frontend (port 5173) and backend (port 3001) servers.
+This will start:
+- MediaMTX server (RTSP: 8554, HLS: 8888)
+- Backend server (port 3001)
+- Frontend server (port 5173)
 
-**Note**: 
-- **With FFmpeg**: Full RTSP streaming functionality with real-time conversion to HLS
-- **Without FFmpeg**: Demo mode only - shows sample videos instead of RTSP streams
-- **Production**: Always install FFmpeg for proper RTSP streaming support
+**Alternative start options:**
+- `npm run dev` - Start without MediaMTX (frontend + backend only)
+- `npm run mediamtx` - Start MediaMTX server only
 
 ## API Documentation
 
@@ -72,6 +69,29 @@ http://localhost:3001/api
 
 ### Stream Endpoints
 
+#### MediaMTX Integration
+
+MediaMTX handles RTSP to HLS conversion automatically:
+
+```json
+{
+  "rtspInput": "rtsp://your-camera:554/stream",
+  "hlsOutput": "http://localhost:8888/stream/index.m3u8",
+  "workflow": [
+    "1. Send RTSP stream to MediaMTX: rtsp://localhost:8554/stream",
+    "2. MediaMTX converts to HLS automatically",
+    "3. Access HLS stream at: http://localhost:8888/stream/index.m3u8",
+    "4. Frontend plays HLS stream using HLS.js"
+  ]
+}
+```
+
+**MediaMTX Ports:**
+- RTSP Server: 8554
+- HLS Server: 8888
+- API: 9997
+- Metrics: 9998
+
 #### POST /stream/start
 Start RTSP stream conversion
 ```json
@@ -79,7 +99,7 @@ Start RTSP stream conversion
   "method": "POST",
   "url": "/api/stream/start",
   "body": {
-    "rtspUrl": "rtsp://example.com/stream"
+    "rtspUrl": "rtsp://localhost:8554/stream"
   },
   "response": {
     "message": "Stream started",
@@ -111,7 +131,7 @@ Get stream status
     "isRunning": true,
     "hlsAvailable": true,
     "hlsUrl": "http://localhost:3001/hls/stream.m3u8",
-    "hasFFmpeg": true,
+    "hasMediaMTX": true,
     "mode": "production"
   }
 }
@@ -223,13 +243,13 @@ Update settings
 ### 1. Setting up RTSP Stream
 
 1. Navigate to the Settings page
-2. Enter your RTSP URL in the "RTSP Stream URL" field (e.g., `rtsp://wowzaec2demo.streamlock.net/vod/mp4:BigBuckBunny_115k.mp4`)
+2. Enter your RTSP URL in the "RTSP Stream URL" field (e.g., `rtsp://localhost:8554/stream`)
 3. Configure other playback settings as needed
 4. Click "Save Settings"
 
-**Note**: The application automatically converts RTSP streams to HLS format using FFmpeg for web browser compatibility.
+**Note**: The application automatically converts RTSP streams to HLS format using MediaMTX for web browser compatibility.
 
-**FFmpeg Requirement**: RTSP streams cannot be played directly in web browsers. This application uses FFmpeg to convert RTSP to HLS (HTTP Live Streaming) format in real-time.
+**MediaMTX Integration**: RTSP streams cannot be played directly in web browsers. This application uses MediaMTX to convert RTSP to HLS (HTTP Live Streaming) format in real-time.
 
 ### 2. Managing Overlays
 
@@ -242,21 +262,21 @@ Update settings
 ### 3. Watching Stream
 
 1. Visit the Stream Player page
-2. The RTSP stream will automatically start converting to HLS format (requires FFmpeg)
+2. The RTSP stream will automatically start converting to HLS format via MediaMTX
 3. Click play to start watching the livestream
 4. Use the video controls for playback management
 4. Overlays will appear automatically on the stream
 
-### 4. Stream Conversion Process (Requires FFmpeg)
+### 4. Stream Conversion Process (MediaMTX)
 
-The application uses FFmpeg to convert RTSP streams to HLS (HTTP Live Streaming) format:
+The application uses MediaMTX to convert RTSP streams to HLS (HTTP Live Streaming) format:
 
 1. **RTSP Input**: Receives video from RTSP source
-2. **FFmpeg Processing**: Converts to H.264/AAC with HLS segmentation
+2. **MediaMTX Processing**: Converts to H.264/AAC with HLS segmentation
 3. **HLS Output**: Generates .m3u8 playlist and .ts segments
 4. **Web Playback**: Uses HLS.js for browser compatibility
 
-**Without FFmpeg**: The application will display a demo mode warning and show sample videos instead of live RTSP streams.
+**MediaMTX Benefits**: More reliable than FFmpeg in containerized environments, easier configuration, and better performance for streaming applications.
 
 ### 5. Overlay Types
 
@@ -314,12 +334,17 @@ To replace the JSON file storage with MongoDB:
 For testing purposes, you can use these public RTSP streams:
 
 - `rtsp://wowzaec2demo.streamlock.net/vod/mp4:BigBuckBunny_115k.mp4`
-- `rtsp://184.72.239.149/vod/mp4:BigBuckBunny_115k.mp4`
+- `rtsp://localhost:8554/test` (configured in MediaMTX for testing)
 
-**Requirements**: 
-- FFmpeg must be installed to test RTSP streams
+**MediaMTX Setup**: 
+- MediaMTX will automatically handle RTSP to HLS conversion
 - Public RTSP streams may not always be available
-- For production use, configure your own RTSP source
+- For production use, configure your own RTSP source in MediaMTX
+
+**Testing with MediaMTX**:
+1. Start MediaMTX: `npm run mediamtx`
+2. Send RTSP stream to: `rtsp://localhost:8554/your-stream-name`
+3. Access HLS at: `http://localhost:8888/your-stream-name/index.m3u8`
 
 ## Deployment
 
@@ -332,9 +357,10 @@ For testing purposes, you can use these public RTSP streams:
 
 For issues or questions:
 1. Check the console for error messages
-2. **Verify FFmpeg is installed and accessible** (`ffmpeg -version`)
+2. **Verify MediaMTX is running** (check port 8888 for HLS)
 3. Verify RTSP stream URL is accessible
 4. Ensure both frontend and backend servers are running
 5. Check network connectivity and CORS settings
-6. Monitor FFmpeg process logs for stream conversion issues
+6. Monitor MediaMTX logs for stream conversion issues
 7. Check if RTSP source supports the required codecs (H.264/AAC preferred)
+8. Check MediaMTX API at http://localhost:9997 for stream status
