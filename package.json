@@ -9,6 +9,8 @@
     "server": "node server/index.js",
     "mediamtx": "./start-mediamtx.sh",
     "dev-with-mediamtx": "concurrently \"npm run mediamtx\" \"npm run server\" \"npm run client\"",
+    "mediamtx": "./start-mediamtx.sh",
+    "dev-with-mediamtx": "concurrently \"npm run mediamtx\" \"npm run server\" \"npm run client\"",
     "build": "vite build",
     "lint": "eslint .",
     "preview": "vite preview"

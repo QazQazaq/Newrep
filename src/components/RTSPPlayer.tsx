@@ -21,7 +21,9 @@ const RTSPPlayer: React.FC<RTSPPlayerProps> = ({
   const [isMuted, setIsMuted] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [streamMode, setStreamMode] = useState<'hls' | 'error'>('hls');
+  const [streamStatus, setStreamStatus] = useState<any>(null);
+  const [streamMode, setStreamMode] = useState<'rtsp' | 'hls' | 'demo' | 'error'>('rtsp');
+  const [retryCount, setRetryCount] = useState(0);
 
   useEffect(() => {
     if (videoRef.current) {
@@ -30,12 +32,10 @@ const RTSPPlayer: React.FC<RTSPPlayerProps> = ({
   }, [volume]);
 
   useEffect(() => {
-    if (rtspUrl) {
-      const hlsUrl = convertRTSPToMediaMTXHLS(rtspUrl);
-      loadHLSStream(hlsUrl);
-    }
+    cleanup();
+    loadHLSStream("http://localhost:3001/hls/stream.m3u8");
     return () => cleanup();
-  }, [rtspUrl]);
+  }, []);
 
   const cleanup = () => {
     if (hlsRef.current) {
@@ -44,67 +44,100 @@ const RTSPPlayer: React.FC<RTSPPlayerProps> = ({
     }
   };
 
-  const convertRTSPToMediaMTXHLS = (rtspUrl: string): string => {
-    // If it's already an HLS URL (.m3u8), use it directly
-    if (rtspUrl.includes('.m3u8')) {
-      return rtspUrl;
+  const checkStreamStatus = async () => {
+    try {
+      const { getStreamStatus } = await import('../services/api');
+      const status = await getStreamStatus();
+      setStreamStatus(status);
+      return status;
+    } catch (error) {
+      console.error('Failed to check stream status:', error);
+      if (error.isDemoMode) {
+        return {
+          isRunning: false,
+          hlsAvailable: false,
+          mode: 'demo',
+          hasFFmpeg: false
+        };
+      }
+      return null;
     }
-    
-    // Convert RTSP URL to MediaMTX HLS format
-    if (rtspUrl.startsWith('rtsp://')) {
-      // For MediaMTX, we need to create a stream name from the RTSP URL
-      // Since MediaMTX requires the RTSP stream to be sent to it first,
-      // we'll use a hash of the URL as the stream name to make it unique
-      const streamName = btoa(rtspUrl).replace(/[^a-zA-Z0-9]/g, '').substring(0, 16);
-      
-      // MediaMTX HLS endpoint on localhost (where MediaMTX is running)
-      return `http://localhost:8888/${streamName}/index.m3u8`;
-    }
-    
-    // Fallback to original URL
-    return rtspUrl;
   };
 
-  const setupMediaMTXStream = async (rtspUrl: string, streamName: string) => {
+  const startRTSPStream = async () => {
     try {
-      // Check if MediaMTX is running
-      const response = await fetch('http://localhost:9997/v3/config/global');
-      if (!response.ok) {
-        throw new Error('MediaMTX not running');
+      setIsLoading(true);
+      setError(null);
+      
+      // Try to start stream via API
+      const { startStream } = await import('../services/api');
+      try {
+        const data = await startStream(rtspUrl);
+      
+        // Check if FFmpeg is available
+        if (data.mode === 'demo' || (data.note && data.note.includes('not available'))) {
+          setStreamMode('demo');
+          setError(`RTSP streaming not supported: ${data.note}`);
+          setTimeout(() => {
+            loadDemoStream();
+          }, 2000);
+          return;
+        }
+        
+        setStreamMode('hls');
+        
+        // Wait for stream conversion to initialize
+        setTimeout(() => {
+          loadHLSStream(data.hlsUrl);
+        }, 3000);
+        
+      } catch (apiError) {
+        console.error('Stream API error:', apiError);
+        setStreamMode('demo');
+        
+        if (apiError.response?.data?.suggestions) {
+          setError(`RTSP streaming failed: ${apiError.response.data.error}. ${apiError.response.data.note}`);
+        } else {
+          setError(`RTSP streaming failed: ${apiError.message || 'Unknown error'}`);
+        }
+        
+        setTimeout(() => {
+          loadDemoStream();
+        }, 2000);
+        return;
       }
-
-      // Configure MediaMTX path for this stream
-      const pathConfig = {
-        source: rtspUrl,
-        sourceProtocol: 'automatic',
-        sourceAnyPortEnable: false,
-        sourceFingerprint: '',
-        sourceOnDemand: false,
-        sourceOnDemandStartTimeout: '10s',
-        sourceOnDemandCloseAfter: '10s',
-        sourceRedirect: '',
-        disablePublisherOverride: false,
-        fallback: '',
-        srtPublishPassphrase: '',
-        srtReadPassphrase: ''
-      };
-
-      const pathResponse = await fetch(`http://localhost:9997/v3/config/paths/${streamName}`, {
-        method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(pathConfig)
-      });
-
-      if (!pathResponse.ok) {
-        console.warn('Could not configure MediaMTX path, stream may still work');
-      }
-
-      return true;
+      
     } catch (error) {
-      console.error('MediaMTX setup error:', error);
-      return false;
+      console.error('RTSP stream error:', error);
+      if (error.isDemoMode) {
+        setStreamMode('demo');
+        setError('Backend server not available. RTSP streaming requires a backend server with FFmpeg support.');
+        setTimeout(() => {
+          loadDemoStream();
+        }, 2000);
+      } else {
+        setError(`RTSP stream failed: ${error.message || 'Unknown error occurred'}`);
+        setStreamMode('error');
+        setIsLoading(false);
+      }
+    }
+  };
+
+  const loadDemoStream = () => {
+    if (!videoRef.current) return;
+    
+    setIsLoading(false);
+    setStreamMode('demo');
+    
+    // Use a demo video as fallback when RTSP/FFmpeg is not available
+    const demoVideoUrl = 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4';
+    videoRef.current.src = demoVideoUrl;
+    videoRef.current.loop = true;
+    
+    if (autoplay) {
+      videoRef.current.play().catch(() => {
+        console.log('Autoplay blocked, user interaction required');
+      });
     }
   };
 
@@ -112,37 +145,17 @@ const RTSPPlayer: React.FC<RTSPPlayerProps> = ({
     if (!videoRef.current) return;
 
     cleanup();
-    setIsLoading(true);
-    setError(null);
     setStreamMode('hls');
-
-    console.log('Loading MediaMTX HLS stream:', hlsUrl);
-
-    // If this is a MediaMTX URL, try to setup the stream first
-    if (hlsUrl.includes('localhost:8888') && rtspUrl) {
-      const streamName = hlsUrl.split('/')[3]; // Extract stream name from HLS URL
-      setupMediaMTXStream(rtspUrl, streamName).then(success => {
-        if (success) {
-          console.log('MediaMTX stream configured successfully');
-        }
-      });
-    }
 
     if (Hls.isSupported()) {
       const hls = new Hls({
         enableWorker: false,
         lowLatencyMode: true,
-        backBufferLength: 10,
-        maxBufferLength: 30,
-        maxMaxBufferLength: 60,
+        backBufferLength: 30,
+        maxBufferLength: 60,
+        maxMaxBufferLength: 120,
         startLevel: -1,
-        capLevelToPlayerSize: true,
-        debug: false,
-        // MediaMTX specific optimizations
-        liveSyncDurationCount: 3,
-        liveMaxLatencyDurationCount: 5,
-        liveDurationInfinity: true,
-        highBufferWatchdogPeriod: 1
+        capLevelToPlayerSize: true
       });
       
       hlsRef.current = hls;
@@ -151,85 +164,83 @@ const RTSPPlayer: React.FC<RTSPPlayerProps> = ({
       hls.attachMedia(videoRef.current);
       
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
-        console.log('MediaMTX HLS manifest parsed successfully');
+        console.log('HLS manifest parsed successfully');
         setIsLoading(false);
         setError(null);
+        setRetryCount(0);
         if (autoplay) {
-          videoRef.current?.play().catch(err => {
-            console.log('Autoplay blocked:', err);
-          });
+          videoRef.current?.play();
         }
-      });
-
-      hls.on(Hls.Events.MEDIA_ATTACHED, () => {
-        console.log('HLS media attached to MediaMTX stream');
-      });
-
-      hls.on(Hls.Events.FRAG_LOADED, () => {
-        // Fragment loaded successfully
       });
       
       hls.on(Hls.Events.ERROR, (event, data) => {
-        console.error('MediaMTX HLS Error:', data);
-        
+        console.error('HLS Error:', data);
         if (data.fatal) {
           switch (data.type) {
             case Hls.ErrorTypes.NETWORK_ERROR:
-              setError(`Network error loading MediaMTX HLS stream: ${data.details}. Check if MediaMTX is running and accessible at: ${hlsUrl}
-
-MediaMTX Troubleshooting:
-
-1. Check if MediaMTX is running
-2. Verify RTSP source is accessible
-3. Ensure MediaMTX HLS is enabled
-4. Check MediaMTX configuration file
-5. Verify port 8888 is accessible`);
+              setError('Network error loading RTSP stream. Check if the RTSP URL is accessible.');
               break;
             case Hls.ErrorTypes.MEDIA_ERROR:
-              setError(`Media error in MediaMTX HLS stream: ${data.details}. Check RTSP source and MediaMTX configuration.`);
+              setError('Media error in RTSP stream. The stream format may not be supported.');
               break;
             default:
-              setError(`Fatal MediaMTX HLS error: ${data.details}`);
+              setError('Fatal error loading RTSP stream.');
               break;
           }
           setStreamMode('error');
           setIsLoading(false);
-        } else {
-          console.warn('Non-fatal MediaMTX HLS error:', data);
         }
       });
       
     } else if (videoRef.current.canPlayType('application/vnd.apple.mpegurl')) {
       // Safari native HLS support
-      console.log('Using Safari native HLS support for MediaMTX');
       videoRef.current.src = hlsUrl;
       
       videoRef.current.addEventListener('error', (e) => {
-        console.error('Safari video error with MediaMTX:', e);
-        setError(`Error loading MediaMTX HLS stream in Safari: ${hlsUrl}`);
+        console.error('Video error:', e);
+        setError('Error loading RTSP stream in Safari');
         setStreamMode('error');
         setIsLoading(false);
       });
       
       videoRef.current.addEventListener('loadeddata', () => {
-        console.log('Safari MediaMTX HLS stream loaded');
         setIsLoading(false);
         setError(null);
         if (autoplay) {
-          videoRef.current?.play().catch(err => {
-            console.log('Autoplay blocked:', err);
-          });
+          videoRef.current?.play();
         }
       });
-
-      videoRef.current.addEventListener('loadstart', () => {
-        setIsLoading(true);
-      });
-      
     } else {
-      setError('HLS not supported in this browser. Please use a modern browser with HLS support.');
+      setError('HLS not supported in this browser. RTSP streaming requires HLS support.');
       setStreamMode('error');
       setIsLoading(false);
+    }
+  };
+
+  const initializeStream = async () => {
+    setIsLoading(true);
+    setError(null);
+    
+    const status = await checkStreamStatus();
+    
+    if (status?.hlsAvailable && status?.isRunning) {
+      // Stream is already running, load it directly
+      console.log('Loading existing HLS stream');
+      loadHLSStream(status.hlsUrl);
+    } else {
+      // Start new RTSP stream conversion
+      console.log('Starting new RTSP stream conversion');
+      await startRTSPStream();
+    }
+  };
+
+  const retryStream = () => {
+    if (retryCount < 3) {
+      setRetryCount(prev => prev + 1);
+      setError(null);
+      initializeStream();
+    } else {
+      setError('Maximum retry attempts reached. Please check your RTSP URL and network connection.');
     }
   };
 
@@ -266,17 +277,10 @@ MediaMTX Troubleshooting:
     }
   };
 
-  const retryStream = () => {
-    setError(null);
-    if (rtspUrl) {
-      const hlsUrl = convertRTSPToMediaMTXHLS(rtspUrl);
-      loadHLSStream(hlsUrl);
-    }
-  };
-
   const getStatusColor = () => {
     switch (streamMode) {
       case 'hls': return 'text-green-400';
+      case 'demo': return 'text-yellow-400';
       case 'error': return 'text-red-400';
       default: return 'text-gray-400';
     }
@@ -284,21 +288,29 @@ MediaMTX Troubleshooting:
 
   const getStatusText = () => {
     switch (streamMode) {
-      case 'hls': return 'MediaMTX HLS Live';
+      case 'hls': return 'RTSP → HLS Live';
+      case 'demo': return 'Demo Mode';
       case 'error': return 'Stream Error';
       default: return 'Connecting...';
     }
   };
 
-  const currentHLSUrl = rtspUrl ? convertRTSPToMediaMTXHLS(rtspUrl) : '';
-
   return (
     <div className="relative">
-      {/* Stream Status Banner */}
-      <div className="bg-green-600 text-white px-4 py-2 text-sm flex items-center">
-        <Wifi className="w-4 h-4 mr-2" />
-        <strong>RTSP → MediaMTX → HLS:</strong> {rtspUrl}
-      </div>
+      {/* Stream Mode Banner */}
+      {streamMode === 'demo' && (
+        <div className="bg-yellow-600 text-white px-4 py-2 text-sm flex items-center">
+          <AlertCircle className="w-4 h-4 mr-2" />
+          <strong>Demo Mode:</strong> FFmpeg not available. Install FFmpeg to enable RTSP streaming.
+        </div>
+      )}
+      
+      {streamMode === 'hls' && (
+        <div className="bg-green-600 text-white px-4 py-2 text-sm flex items-center">
+          <Wifi className="w-4 h-4 mr-2" />
+          <strong>Live RTSP Stream:</strong> {rtspUrl}
+        </div>
+      )}
       
       <div className="aspect-video bg-black relative">
         <video
@@ -318,12 +330,16 @@ MediaMTX Troubleshooting:
           <div className="absolute inset-0 bg-black bg-opacity-75 flex items-center justify-center">
             <div className="text-center text-white">
               <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500 mx-auto mb-4"></div>
-              <p className="text-lg font-semibold">Loading MediaMTX HLS stream...</p>
-              <div className="text-sm text-gray-400 mt-2 space-y-1">
-                <p>RTSP Source: {rtspUrl}</p>
-                <p>HLS Endpoint: {currentHLSUrl}</p>
-                <p>Connecting via MediaMTX...</p>
-              </div>
+              <p className="text-lg font-semibold">
+                {streamMode === 'demo' ? 'Loading demo video...' : 'Converting RTSP stream...'}
+              </p>
+              {streamMode !== 'demo' && (
+                <div className="text-sm text-gray-400 mt-2 space-y-1">
+                  <p>Processing: {rtspUrl}</p>
+                  <p>Converting to web-compatible HLS format</p>
+                  <p>This may take a few moments...</p>
+                </div>
+              )}
             </div>
           </div>
         )}
@@ -333,30 +349,38 @@ MediaMTX Troubleshooting:
           <div className="absolute inset-0 bg-black bg-opacity-75 flex items-center justify-center">
             <div className="text-center text-white max-w-md px-4">
               <AlertCircle className="w-12 h-12 text-red-500 mx-auto mb-4" />
-              <h3 className="text-lg font-semibold mb-2">MediaMTX HLS Stream Error</h3>
+              <h3 className="text-lg font-semibold mb-2">RTSP Stream Error</h3>
               <div className="mb-4 text-sm space-y-2">
                 <p>{error}</p>
                 <div className="text-xs text-gray-400 bg-gray-800 p-2 rounded">
-                  <p><strong>MediaMTX Troubleshooting:</strong></p>
+                  <p><strong>Common causes:</strong></p>
                   <ul className="list-disc list-inside mt-1 space-y-1">
-                    <li>Check if MediaMTX is running</li>
-                    <li>Verify RTSP source is accessible</li>
-                    <li>Ensure MediaMTX HLS is enabled</li>
-                    <li>Check MediaMTX configuration file</li>
-                    <li>Verify port 8888 is accessible</li>
+                    <li>Environment doesn't support FFmpeg execution</li>
+                    <li>RTSP URL is not accessible</li>
+                    <li>Network connectivity issues</li>
+                    <li>Containerized environment restrictions</li>
                   </ul>
                 </div>
               </div>
               <div className="space-y-2">
-                <p className="text-xs text-gray-400">RTSP: {rtspUrl}</p>
-                <p className="text-xs text-gray-400">HLS: {currentHLSUrl}</p>
+                <p className="text-xs text-gray-400">RTSP URL: {rtspUrl}</p>
+                <p className="text-xs text-gray-400">Retry attempts: {retryCount}/3</p>
               </div>
-              <button
-                onClick={retryStream}
-                className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded transition-colors mt-4"
-              >
-                Retry MediaMTX Stream
-              </button>
+              <div className="flex space-x-2 mt-4">
+                <button
+                  onClick={retryStream}
+                  disabled={retryCount >= 3}
+                  className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded transition-colors disabled:opacity-50"
+                >
+                  Retry RTSP
+                </button>
+                <button
+                  onClick={loadDemoStream}
+                  className="bg-gray-600 hover:bg-gray-700 text-white px-4 py-2 rounded transition-colors"
+                >
+                  Use Demo Video
+                </button>
+              </div>
             </div>
           </div>
         )}
